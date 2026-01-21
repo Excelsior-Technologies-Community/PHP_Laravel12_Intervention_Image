@@ -1,59 +1,264 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# PHP_Laravel12_Intervention_Image
 
 <p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
+    <img src="https://img.shields.io/badge/PHP-8.2%2B-blue" alt="PHP Version">
+    <img src="https://img.shields.io/badge/Laravel-12-red" alt="Laravel Version">
+    <img src="https://img.shields.io/badge/Intervention_Image-v3-green" alt="Intervention Image">
+    <img src="https://img.shields.io/badge/Image%20Upload-Thumbnail%20Support-orange" alt="Feature">
+    <img src="https://img.shields.io/badge/Status-Stable-brightgreen" alt="Project Status">
+    <img src="https://img.shields.io/badge/License-MIT-lightgrey" alt="License">
 </p>
 
-## About Laravel
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## Overview
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+This project demonstrates how to upload images and generate thumbnail images in **Laravel 12** using **Intervention Image v3**. It follows the latest best practices, avoids deprecated facade-based syntax, and is suitable for real-world use cases such as e-commerce product images, profile pictures, and banners.
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+The implementation is simple, clean, and fully compatible with Laravel 12.
 
-## Learning Laravel
+---
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+## Features
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+* Image upload using Laravel 12
+* Thumbnail generation using Intervention Image v3
+* No facade usage (recommended approach)
+* Automatic directory creation
+* Server-side validation
+* Bootstrap-based UI
+* Ready for e-commerce and production use
 
-## Laravel Sponsors
+---
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+## Folder Structure
 
-### Premium Partners
+```
+example-app/
+├── app/
+│   └── Http/
+│       └── Controllers/
+│           └── ImageController.php
+├── public/
+│   └── images/
+│       ├── thumbnail/
+│       └── (uploaded images)
+├── resources/
+│   └── views/
+│       └── imageUpload.blade.php
+├── routes/
+│   └── web.php
+└── composer.json
+```
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+---
 
-## Contributing
+## Requirements
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+• PHP 8.2+
+• Laravel 12
+• Composer
+• GD extension enabled (recommended)
 
-## Code of Conduct
+---
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+## Step 1: Create Laravel Project (Optional)
 
-## Security Vulnerabilities
+If you already have a Laravel 12 project, you can skip this step.
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+composer create-project laravel/laravel example-app
 
-## License
+---
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+## Step 2: Install Intervention Image
+
+Laravel 12 uses Intervention Image v3, which does not rely on facades.
+
+composer require intervention/image
+
+No service provider or alias configuration is required.
+
+---
+
+## Step 3: Create Routes
+
+Define routes for displaying the upload form and handling the image upload.
+
+routes/web.php
+
+```php
+<?php
+
+use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\ImageController;
+
+Route::get('image-upload', [ImageController::class, 'index']);
+Route::post('image-upload', [ImageController::class, 'store'])->name('image.store');
+```
+
+---
+
+## Step 4: Create Controller
+
+Generate a controller using Artisan:
+
+php artisan make:controller ImageController
+
+app/Http/Controllers/ImageController.php
+
+```php
+<?php
+
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use Illuminate\View\View;
+use Illuminate\Http\RedirectResponse;
+use Intervention\Image\ImageManager;
+use Intervention\Image\Drivers\Gd\Driver;
+use Illuminate\Support\Facades\File;
+
+class ImageController extends Controller
+{
+    public function index(): View
+    {
+        return view('imageUpload');
+    }
+
+    public function store(Request $request): RedirectResponse
+    {
+        $request->validate([
+            'image' => 'required|image|mimes:jpg,jpeg,png,webp|max:2048',
+        ]);
+
+        $manager = new ImageManager(new Driver());
+
+        $imageFile = $request->file('image');
+        $imageName = time() . '-' . $imageFile->getClientOriginalName();
+
+        $mainPath = public_path('images/');
+        $thumbPath = public_path('images/thumbnail/');
+
+        // Create folders if not exist
+        File::ensureDirectoryExists($mainPath, 0755, true);
+        File::ensureDirectoryExists($thumbPath, 0755, true);
+
+        // Save original image
+        $image = $manager->read($imageFile);
+        $image->save($mainPath . $imageName);
+
+        // Save thumbnail
+        $image->resize(100, 100);
+        $image->save($thumbPath . $imageName);
+
+        return back()
+            ->with('success', 'Image uploaded successfully')
+            ->with('imageName', $imageName);
+    }
+}
+```
+
+---
+
+## Step 5: Create View File
+
+resources/views/imageUpload.blade.php
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+<title>Laravel 12 Image Upload</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+
+
+<div class="container mt-5">
+<div class="card">
+<div class="card-header">Laravel 12 Intervention Image</div>
+<div class="card-body">
+
+
+<!-- Display validation errors -->
+@if ($errors->any())
+<div class="alert alert-danger">
+<ul class="mb-0">
+@foreach ($errors->all() as $error)
+<li>{{ $error }}</li>
+@endforeach
+</ul>
+</div>
+@endif
+
+
+<!-- Display success message -->
+@if (session('success'))
+<div class="alert alert-success">
+{{ session('success') }}
+</div>
+
+
+<div class="row">
+<div class="col-md-6">
+<strong>Original Image</strong><br>
+<img src="/images/{{ session('imageName') }}" width="300">
+</div>
+<div class="col-md-6">
+<strong>Thumbnail Image</strong><br>
+<img src="/images/thumbnail/{{ session('imageName') }}">
+</div>
+</div>
+<hr>
+@endif
+
+
+<!-- Upload form -->
+<form action="{{ route('image.store') }}" method="POST" enctype="multipart/form-data">
+@csrf
+
+
+<div class="mb-3">
+<label class="form-label">Select Image</label>
+<input type="file" name="image" class="form-control">
+</div>
+
+
+<button class="btn btn-success">Upload</button>
+</form>
+</div>
+</div>
+</div>
+
+
+</body>
+</html>
+```
+
+---
+
+## Step 6: Run Application
+
+```
+php artisan serve
+```
+
+Open the following URL in your browser:
+
+```
+http://localhost:8000/image-upload
+```
+---
+
+## Output
+
+<img width="1626" height="769" alt="Screenshot 2026-01-21 165729" src="https://github.com/user-attachments/assets/67fae260-593a-4a07-ad55-46885ec47f6f" />
+
+
+---
+
+## Notes
+
+• This implementation is Laravel 12 compatible
+• Uses Intervention Image v3 (recommended)
+• Avoids deprecated facade-based syntax
+• Suitable for E-commerce product images, profile images, and banners
