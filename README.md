@@ -258,7 +258,7 @@ http://localhost:8000/image-upload
 
 ## Notes
 
-• This implementation is Laravel 12 compatible
-• Uses Intervention Image v3 (recommended)
-• Avoids deprecated facade-based syntax
-• Suitable for E-commerce product images, profile images, and banners
+* This implementation is Laravel 12 compatible
+* Uses Intervention Image v3 (recommended)
+* Avoids deprecated facade-based syntax
+* Suitable for E-commerce product images, profile images, and banners
