@@ -54,10 +54,10 @@ example-app/
 
 ## Requirements
 
-• PHP 8.2+
-• Laravel 12
-• Composer
-• GD extension enabled (recommended)
+* PHP 8.2+
+* Laravel 12
+* Composer
+* GD extension enabled (recommended)
 
 ---
 
@@ -65,23 +65,23 @@ example-app/
 
 If you already have a Laravel 12 project, you can skip this step.
 
+```
 composer create-project laravel/laravel example-app
-
+```
 ---
 
 ## Step 2: Install Intervention Image
 
 Laravel 12 uses Intervention Image v3, which does not rely on facades.
 
+```
 composer require intervention/image
-
+```
 No service provider or alias configuration is required.
 
 ---
 
 ## Step 3: Create Routes
-
-Define routes for displaying the upload form and handling the image upload.
 
 routes/web.php
 
@@ -100,9 +100,9 @@ Route::post('image-upload', [ImageController::class, 'store'])->name('image.stor
 ## Step 4: Create Controller
 
 Generate a controller using Artisan:
-
+```
 php artisan make:controller ImageController
-
+```
 app/Http/Controllers/ImageController.php
 
 ```php
