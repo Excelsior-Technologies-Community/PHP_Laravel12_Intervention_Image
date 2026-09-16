@@ -2,12 +2,12 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
-use Illuminate\View\View;
 use Illuminate\Http\RedirectResponse;
-use Intervention\Image\ImageManager;
-use Intervention\Image\Drivers\Gd\Driver;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\File;
+use Illuminate\View\View;
+use Intervention\Image\Drivers\Gd\Driver;
+use Intervention\Image\ImageManager;
 
 class ImageController extends Controller
 {
@@ -18,348 +18,530 @@ class ImageController extends Controller
 
     public function store(Request $request): RedirectResponse
     {
-        $request->validate([
-            'image' => 'required|image|mimes:jpg,jpeg,png,webp|max:2048',
+        $validated = $request->validate([
+            'image' => [
+                'required',
+                'image',
+                'mimes:jpg,jpeg,png,webp',
+                'max:2048',
+            ],
 
-            'crop' => 'required|in:original,1:1,4:3,3:4,16:9',
+            // Existing features
+            'crop' => [
+                'required',
+                'in:original,1:1,4:3,3:4,16:9',
+            ],
 
-            'resize' => 'required|in:300x300,600x400,800x600',
+            'resize' => [
+                'required',
+                'in:original,300x300,600x400,800x600',
+            ],
 
-            'rotation' => 'required|in:0,90,180,270',
+            'rotation' => [
+                'required',
+                'in:0,90,180,270',
+            ],
 
-            'watermark' => 'nullable|string|max:50',
+            'watermark' => [
+                'nullable',
+                'string',
+                'max:100',
+            ],
 
-            'format' => 'required|in:original,jpg,png,webp',
+            'format' => [
+                'required',
+                'in:original,jpg,png,webp',
+            ],
 
-            'quality' => 'required|integer|min:10|max:100',
+            'quality' => [
+                'required',
+                'integer',
+                'min:10',
+                'max:100',
+            ],
+
+            // New features
+            'auto_orientation' => [
+                'required',
+                'in:yes,no',
+            ],
+
+            'brightness' => [
+                'required',
+                'integer',
+                'min:-100',
+                'max:100',
+            ],
+
+            'contrast' => [
+                'required',
+                'integer',
+                'min:-100',
+                'max:100',
+            ],
+
+            'grayscale' => [
+                'required',
+                'in:yes,no',
+            ],
+
+            'blur' => [
+                'required',
+                'integer',
+                'min:0',
+                'max:20',
+            ],
+
+            'sharpen' => [
+                'required',
+                'integer',
+                'min:0',
+                'max:20',
+            ],
+
+            'mirror' => [
+                'required',
+                'in:none,horizontal,vertical',
+            ],
+
+            'invert' => [
+                'required',
+                'in:yes,no',
+            ],
         ]);
 
         /*
         |--------------------------------------------------------------------------
-        | Create Intervention Image Manager
+        | Create directories
         |--------------------------------------------------------------------------
         */
 
-        $manager = new ImageManager(new Driver());
+        $imagesPath = public_path('images');
 
-        $imageFile = $request->file('image');
+        $thumbnailPath = public_path('images/thumbnail');
 
-        /*
-        |--------------------------------------------------------------------------
-        | Generate Unique Filename
-        |--------------------------------------------------------------------------
-        */
+        $processedPath = public_path('images/processed');
 
-        $originalExtension = strtolower(
-            $imageFile->getClientOriginalExtension()
-        );
-
-        $baseName = pathinfo(
-            $imageFile->getClientOriginalName(),
-            PATHINFO_FILENAME
-        );
-
-        $uniqueName = time() . '-' . uniqid();
-
-        /*
-        |--------------------------------------------------------------------------
-        | Directories
-        |--------------------------------------------------------------------------
-        */
-
-        $mainPath = public_path('images/');
-        $thumbPath = public_path('images/thumbnail/');
-        $processedPath = public_path('images/processed/');
-
-        File::ensureDirectoryExists(
-            $mainPath,
-            0755,
-            true
-        );
-
-        File::ensureDirectoryExists(
-            $thumbPath,
-            0755,
-            true
-        );
-
-        File::ensureDirectoryExists(
-            $processedPath,
-            0755,
-            true
-        );
-
-        /*
-        |--------------------------------------------------------------------------
-        | Save Original Image
-        |--------------------------------------------------------------------------
-        */
-
-        $originalImageName =
-            $uniqueName .
-            '-' .
-            $baseName .
-            '.' .
-            $originalExtension;
-
-        $originalImage = $manager->read($imageFile);
-
-        $originalImage->save(
-            $mainPath . $originalImageName
-        );
-
-        /*
-        |--------------------------------------------------------------------------
-        | Generate 100 x 100 Thumbnail
-        |--------------------------------------------------------------------------
-        */
-
-        $thumbnail = $manager->read($imageFile);
-
-        $thumbnail->resize(
-            100,
-            100
-        );
-
-        $thumbnail->save(
-            $thumbPath . $originalImageName
-        );
-
-        /*
-        |--------------------------------------------------------------------------
-        | Read Image For Processing
-        |--------------------------------------------------------------------------
-        */
-
-        $processedImage = $manager->read($imageFile);
-
-        /*
-        |--------------------------------------------------------------------------
-        | 1. Image Crop & Aspect Ratio
-        |--------------------------------------------------------------------------
-        */
-
-        $selectedCrop = $request->crop;
-
-        if ($selectedCrop !== 'original') {
-
-            /*
-            |--------------------------------------------------------------
-            | Get Original Image Dimensions
-            |--------------------------------------------------------------
-            */
-
-            $imageWidth = $processedImage->width();
-            $imageHeight = $processedImage->height();
-
-            /*
-            |--------------------------------------------------------------
-            | Determine Target Aspect Ratio
-            |--------------------------------------------------------------
-            */
-
-            switch ($selectedCrop) {
-
-                case '1:1':
-
-                    $targetRatio = 1 / 1;
-
-                    break;
-
-                case '4:3':
-
-                    $targetRatio = 4 / 3;
-
-                    break;
-
-                case '3:4':
-
-                    $targetRatio = 3 / 4;
-
-                    break;
-
-                case '16:9':
-
-                    $targetRatio = 16 / 9;
-
-                    break;
-
-                default:
-
-                    $targetRatio = null;
-            }
-
-            /*
-            |--------------------------------------------------------------
-            | Calculate Center Crop
-            |--------------------------------------------------------------
-            */
-
-            if ($targetRatio !== null) {
-
-                $currentRatio =
-                    $imageWidth / $imageHeight;
-
-                if ($currentRatio > $targetRatio) {
-
-                    /*
-                    | Image is wider than target.
-                    | Reduce width.
-                    */
-
-                    $cropHeight = $imageHeight;
-
-                    $cropWidth = (int) round(
-                        $imageHeight * $targetRatio
-                    );
-
-                } else {
-
-                    /*
-                    | Image is taller than target.
-                    | Reduce height.
-                    */
-
-                    $cropWidth = $imageWidth;
-
-                    $cropHeight = (int) round(
-                        $imageWidth / $targetRatio
-                    );
-                }
-
-                /*
-                |----------------------------------------------------------
-                | Center Crop
-                |----------------------------------------------------------
-                */
-
-                $offsetX = (int) round(
-                    ($imageWidth - $cropWidth) / 2
-                );
-
-                $offsetY = (int) round(
-                    ($imageHeight - $cropHeight) / 2
-                );
-
-                $processedImage->crop(
-                    $cropWidth,
-                    $cropHeight,
-                    $offsetX,
-                    $offsetY
-                );
-            }
+        if (!File::exists($imagesPath)) {
+            File::makeDirectory(
+                $imagesPath,
+                0755,
+                true
+            );
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | 2. Custom Resize
-        |--------------------------------------------------------------------------
-        */
+        if (!File::exists($thumbnailPath)) {
+            File::makeDirectory(
+                $thumbnailPath,
+                0755,
+                true
+            );
+        }
 
-        [$width, $height] = explode(
-            'x',
-            $request->resize
-        );
-
-        $processedImage->resize(
-            (int) $width,
-            (int) $height
-        );
-
-        /*
-        |--------------------------------------------------------------------------
-        | 3. Image Rotation
-        |--------------------------------------------------------------------------
-        */
-
-        if ((int) $request->rotation !== 0) {
-
-            $processedImage->rotate(
-                (int) $request->rotation
+        if (!File::exists($processedPath)) {
+            File::makeDirectory(
+                $processedPath,
+                0755,
+                true
             );
         }
 
         /*
         |--------------------------------------------------------------------------
-        | 4. Text Watermark
+        | Create Image Manager
         |--------------------------------------------------------------------------
         */
 
-        if ($request->filled('watermark')) {
+        $manager = new ImageManager(
+            new Driver(),
+            autoOrientation: false
+        );
 
-            $watermarkText = $request->watermark;
+        /*
+        |--------------------------------------------------------------------------
+        | Upload original image
+        |--------------------------------------------------------------------------
+        */
+
+        $uploadedImage = $request->file('image');
+
+        $originalExtension = strtolower(
+            $uploadedImage->getClientOriginalExtension()
+        );
+
+        $originalName = pathinfo(
+            $uploadedImage->getClientOriginalName(),
+            PATHINFO_FILENAME
+        );
+
+        $safeOriginalName = preg_replace(
+            '/[^A-Za-z0-9_-]/',
+            '_',
+            $originalName
+        );
+
+        $timestamp = now()->format('Ymd_His');
+
+        $originalFileName =
+            $safeOriginalName . '_' .
+            $timestamp . '.' .
+            $originalExtension;
+
+        /*
+        |--------------------------------------------------------------------------
+        | Save original image
+        |--------------------------------------------------------------------------
+        */
+
+        $uploadedImage->move(
+            $imagesPath,
+            $originalFileName
+        );
+
+        $originalFullPath =
+            $imagesPath . DIRECTORY_SEPARATOR . $originalFileName;
+
+        /*
+        |--------------------------------------------------------------------------
+        | Read original image
+        |--------------------------------------------------------------------------
+        */
+
+        $originalImage = $manager->read(
+            $originalFullPath
+        );
+
+        /*
+        |--------------------------------------------------------------------------
+        | Create 100x100 thumbnail
+        |--------------------------------------------------------------------------
+        */
+
+        $thumbnailImage = $manager->read(
+            $originalFullPath
+        );
+
+        if ($validated['auto_orientation'] === 'yes') {
+            $thumbnailImage->orient();
+        }
+
+        $thumbnailImage->cover(
+            100,
+            100
+        );
+
+        $thumbnailFileName =
+            pathinfo(
+                $originalFileName,
+                PATHINFO_FILENAME
+            ) . '_thumbnail.' .
+            $originalExtension;
+
+        $thumbnailFullPath =
+            $thumbnailPath .
+            DIRECTORY_SEPARATOR .
+            $thumbnailFileName;
+
+        /*
+        |--------------------------------------------------------------------------
+        | Save thumbnail according to original extension
+        |--------------------------------------------------------------------------
+        */
+
+        switch ($originalExtension) {
+            case 'jpg':
+            case 'jpeg':
+                $thumbnailImage
+                    ->toJpeg(85)
+                    ->save($thumbnailFullPath);
+                break;
+
+            case 'png':
+                $thumbnailImage
+                    ->toPng(false)
+                    ->save($thumbnailFullPath);
+                break;
+
+            case 'webp':
+                $thumbnailImage
+                    ->toWebp(85)
+                    ->save($thumbnailFullPath);
+                break;
+
+            default:
+                $thumbnailImage
+                    ->toJpeg(85)
+                    ->save($thumbnailFullPath);
+
+                break;
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Read image for processing
+        |--------------------------------------------------------------------------
+        */
+
+        $processedImage = $manager->read(
+            $originalFullPath
+        );
+
+        /*
+        |--------------------------------------------------------------------------
+        | 1. EXIF Auto Orientation
+        |--------------------------------------------------------------------------
+        */
+
+        if ($validated['auto_orientation'] === 'yes') {
+            $processedImage->orient();
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | 2. Crop / Aspect Ratio
+        |--------------------------------------------------------------------------
+        */
+
+        switch ($validated['crop']) {
+            case '1:1':
+                $processedImage->cover(
+                    600,
+                    600
+                );
+                break;
+
+            case '4:3':
+                $processedImage->cover(
+                    800,
+                    600
+                );
+                break;
+
+            case '3:4':
+                $processedImage->cover(
+                    600,
+                    800
+                );
+                break;
+
+            case '16:9':
+                $processedImage->cover(
+                    800,
+                    450
+                );
+                break;
+
+            case 'original':
+            default:
+                break;
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Resize
+        |--------------------------------------------------------------------------
+        */
+
+        switch ($validated['resize']) {
+            case '300x300':
+                $processedImage->resize(
+                    300,
+                    300
+                );
+                break;
+
+            case '600x400':
+                $processedImage->resize(
+                    600,
+                    400
+                );
+                break;
+
+            case '800x600':
+                $processedImage->resize(
+                    800,
+                    600
+                );
+                break;
+
+            case 'original':
+            default:
+                break;
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Rotation
+        |--------------------------------------------------------------------------
+        */
+
+        $rotation = (int) $validated['rotation'];
+
+        if ($rotation !== 0) {
+            $processedImage->rotate(
+                $rotation
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Brightness
+        |--------------------------------------------------------------------------
+        */
+
+        $brightness = (int) $validated['brightness'];
+
+        if ($brightness !== 0) {
+            $processedImage->brightness(
+                $brightness
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Contrast
+        |--------------------------------------------------------------------------
+        */
+
+        $contrast = (int) $validated['contrast'];
+
+        if ($contrast !== 0) {
+            $processedImage->contrast(
+                $contrast
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Grayscale
+        |--------------------------------------------------------------------------
+        */
+
+        if ($validated['grayscale'] === 'yes') {
+            $processedImage->greyscale();
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Blur
+        |--------------------------------------------------------------------------
+        */
+
+        $blur = (int) $validated['blur'];
+
+        if ($blur > 0) {
+            $processedImage->blur(
+                $blur
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Sharpen
+        |--------------------------------------------------------------------------
+        */
+
+        $sharpen = (int) $validated['sharpen'];
+
+        if ($sharpen > 0) {
+            $processedImage->sharpen(
+                $sharpen
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Horizontal / Vertical Mirror
+        |--------------------------------------------------------------------------
+        */
+
+        switch ($validated['mirror']) {
+            case 'horizontal':
+                $processedImage->flop();
+                break;
+
+            case 'vertical':
+                $processedImage->flip();
+                break;
+
+            case 'none':
+            default:
+                break;
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Invert Colors
+        |--------------------------------------------------------------------------
+        */
+
+        if ($validated['invert'] === 'yes') {
+            $processedImage->invert();
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Watermark
+        |--------------------------------------------------------------------------
+        */
+
+        if (
+            isset($validated['watermark']) &&
+            trim($validated['watermark']) !== ''
+        ) {
+            $watermarkText = trim(
+                $validated['watermark']
+            );
 
             $processedImage->text(
                 $watermarkText,
                 20,
                 20,
                 function ($font) {
-
                     $font->size(24);
-
                     $font->color('#ffffff');
-
                     $font->stroke(
                         '#000000',
                         2
                     );
-
-                    $font->align('left');
-
-                    $font->valign('top');
                 }
             );
         }
 
         /*
         |--------------------------------------------------------------------------
-        | 5. Format Conversion & Optimization
+        | Output Format
         |--------------------------------------------------------------------------
         */
 
-        $selectedFormat = $request->format;
+        $format = $validated['format'];
 
-        $quality = (int) $request->quality;
+        $quality = (int) $validated['quality'];
+
+        $extension = $originalExtension;
 
         /*
         |--------------------------------------------------------------------------
-        | Determine Output Format
+        | Encode image
         |--------------------------------------------------------------------------
+        |
+        | IMPORTANT:
+        |
+        | Intervention Image installed in this project expects:
+        |
+        | toPng(bool $interlaced = false)
+        |
+        | Therefore we MUST NOT pass the numeric quality/compression
+        | value to toPng().
+        |
         */
 
-        if ($selectedFormat === 'original') {
-
-            $outputFormat = $originalExtension;
-
-        } else {
-
-            $outputFormat = $selectedFormat;
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Generate Processed Filename
-        |--------------------------------------------------------------------------
-        */
-
-        $processedImageName =
-            $uniqueName .
-            '-' .
-            $baseName .
-            '-processed.' .
-            $outputFormat;
-
-        $processedFullPath =
-            $processedPath .
-            $processedImageName;
-
-        /*
-        |--------------------------------------------------------------------------
-        | Encode According To Selected Format
-        |--------------------------------------------------------------------------
-        */
-
-        switch ($outputFormat) {
+        switch ($format) {
+            /*
+            |--------------------------------------------------------------------------
+            | JPG
+            |--------------------------------------------------------------------------
+            */
 
             case 'jpg':
 
@@ -368,35 +550,32 @@ class ImageController extends Controller
                         $quality
                     );
 
-                break;
-
-            case 'jpeg':
-
-                $encodedImage =
-                    $processedImage->toJpeg(
-                        $quality
-                    );
+                $extension = 'jpg';
 
                 break;
+
+            /*
+            |--------------------------------------------------------------------------
+            | PNG
+            |--------------------------------------------------------------------------
+            */
 
             case 'png':
 
-                /*
-                | PNG uses compression level 0-9.
-                | Convert quality 10-100 into PNG compression.
-                */
-
-                $compressionLevel =
-                    (int) round(
-                        (100 - $quality) / 100 * 9
-                    );
-
                 $encodedImage =
                     $processedImage->toPng(
-                        $compressionLevel
+                        false
                     );
 
+                $extension = 'png';
+
                 break;
+
+            /*
+            |--------------------------------------------------------------------------
+            | WEBP
+            |--------------------------------------------------------------------------
+            */
 
             case 'webp':
 
@@ -405,28 +584,103 @@ class ImageController extends Controller
                         $quality
                     );
 
+                $extension = 'webp';
+
                 break;
 
+            /*
+            |--------------------------------------------------------------------------
+            | Original
+            |--------------------------------------------------------------------------
+            */
+
+            case 'original':
             default:
 
-                $encodedImage =
-                    $processedImage->encode();
+                switch ($originalExtension) {
+                    case 'jpg':
+                    case 'jpeg':
+
+                        $encodedImage =
+                            $processedImage->toJpeg(
+                                $quality
+                            );
+
+                        $extension = 'jpg';
+
+                        break;
+
+                    case 'png':
+
+                        $encodedImage =
+                            $processedImage->toPng(
+                                false
+                            );
+
+                        $extension = 'png';
+
+                        break;
+
+                    case 'webp':
+
+                        $encodedImage =
+                            $processedImage->toWebp(
+                                $quality
+                            );
+
+                        $extension = 'webp';
+
+                        break;
+
+                    default:
+
+                        $encodedImage =
+                            $processedImage->toJpeg(
+                                $quality
+                            );
+
+                        $extension = 'jpg';
+
+                        break;
+                }
+
+                break;
         }
 
         /*
         |--------------------------------------------------------------------------
-        | Save Optimized / Converted Image
+        | Processed filename
         |--------------------------------------------------------------------------
         */
 
-        File::put(
-            $processedFullPath,
-            (string) $encodedImage
+        $processedFileName =
+            pathinfo(
+                $originalFileName,
+                PATHINFO_FILENAME
+            ) .
+            '_processed_' .
+            now()->format('Ymd_His') .
+            '.' .
+            $extension;
+
+        $processedFullPath =
+            $processedPath .
+            DIRECTORY_SEPARATOR .
+            $processedFileName;
+
+        /*
+        |--------------------------------------------------------------------------
+        | Save processed image
+        |--------------------------------------------------------------------------
+        */
+
+        $encodedImage->save(
+            $processedFullPath
         );
 
         /*
         |--------------------------------------------------------------------------
-        | Get Processed File Size
+        | Processed file information
         |--------------------------------------------------------------------------
         */
 
@@ -435,52 +689,91 @@ class ImageController extends Controller
                 $processedFullPath
             );
 
+        $processedWidth =
+            $processedImage->width();
+
+        $processedHeight =
+            $processedImage->height();
+
         /*
         |--------------------------------------------------------------------------
-        | Return Result
+        | Store result information in session
         |--------------------------------------------------------------------------
         */
 
-        return back()
+        session([
+            'image_result' => [
+                'original' => $originalFileName,
+
+                'thumbnail' => $thumbnailFileName,
+
+                'processed' => $processedFileName,
+
+                'crop' => $validated['crop'],
+
+                'resize' => $validated['resize'],
+
+                'rotation' => $validated['rotation'],
+
+                'watermark' =>
+                    $validated['watermark'] ?? '',
+
+                'format' => $format,
+
+                'quality' => $quality,
+
+                'auto_orientation' =>
+                    $validated['auto_orientation'],
+
+                'brightness' =>
+                    $brightness,
+
+                'contrast' =>
+                    $contrast,
+
+                'grayscale' =>
+                    $validated['grayscale'],
+
+                'blur' =>
+                    $blur,
+
+                'sharpen' =>
+                    $sharpen,
+
+                'mirror' =>
+                    $validated['mirror'],
+
+                'invert' =>
+                    $validated['invert'],
+
+                'width' =>
+                    $processedWidth,
+
+                'height' =>
+                    $processedHeight,
+
+                'file_size' =>
+                    $processedFileSize,
+
+                'file_size_kb' =>
+                    round(
+                        $processedFileSize / 1024,
+                        2
+                    ),
+            ],
+        ]);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Redirect
+        |--------------------------------------------------------------------------
+        */
+
+        return redirect()
+            ->route('image.index')
             ->with(
                 'success',
-                'Image uploaded, cropped, processed and optimized successfully.'
-            )
-            ->with(
-                'imageName',
-                $originalImageName
-            )
-            ->with(
-                'processedImageName',
-                $processedImageName
-            )
-            ->with(
-                'crop',
-                $selectedCrop
-            )
-            ->with(
-                'resize',
-                $request->resize
-            )
-            ->with(
-                'rotation',
-                $request->rotation
-            )
-            ->with(
-                'watermark',
-                $request->watermark
-            )
-            ->with(
-                'format',
-                strtoupper($outputFormat)
-            )
-            ->with(
-                'quality',
-                $quality
-            )
-            ->with(
-                'processedFileSize',
-                $processedFileSize
+                'Image processed successfully.'
             );
     }
 }
