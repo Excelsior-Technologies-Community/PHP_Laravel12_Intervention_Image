@@ -8,772 +8,507 @@ use Illuminate\Support\Facades\File;
 use Illuminate\View\View;
 use Intervention\Image\Drivers\Gd\Driver;
 use Intervention\Image\ImageManager;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
+use ZipArchive;
 
 class ImageController extends Controller
 {
+    /**
+     * Display the Image Processing Studio.
+     */
     public function index(): View
     {
         return view('imageUpload');
     }
 
+    /**
+     * Process image with transforms, dual-mode watermarks, target size compression, and responsive variants.
+     */
     public function store(Request $request): RedirectResponse
     {
         $validated = $request->validate([
             'image' => [
                 'required',
                 'image',
-                'mimes:jpg,jpeg,png,webp',
-                'max:2048',
+                'mimes:jpg,jpeg,png,webp,avif',
+                'max:10240', // 10MB
             ],
 
-            // Existing features
-            'crop' => [
-                'required',
-                'in:original,1:1,4:3,3:4,16:9',
-            ],
+            // Transforms
+            'crop' => ['required', 'in:original,1:1,4:3,3:4,16:9'],
+            'resize' => ['required', 'in:original,300x300,600x400,800x600,1200x800,1920x1080'],
+            'rotation' => ['required', 'in:0,90,180,270'],
+            'auto_orientation' => ['required', 'in:yes,no'],
+            'brightness' => ['required', 'integer', 'min:-100', 'max:100'],
+            'contrast' => ['required', 'integer', 'min:-100', 'max:100'],
+            'grayscale' => ['required', 'in:yes,no'],
+            'blur' => ['required', 'integer', 'min:0', 'max:20'],
+            'sharpen' => ['required', 'integer', 'min:0', 'max:20'],
+            'mirror' => ['required', 'in:none,horizontal,vertical'],
+            'invert' => ['required', 'in:yes,no'],
 
-            'resize' => [
-                'required',
-                'in:original,300x300,600x400,800x600',
-            ],
+            // Output & Compression
+            'format' => ['required', 'in:original,jpg,png,webp,avif'],
+            'compression_mode' => ['required', 'in:manual,target_size'],
+            'quality' => ['required', 'integer', 'min:10', 'max:100'],
+            'target_kb' => ['nullable', 'integer', 'min:20', 'max:5000'],
 
-            'rotation' => [
-                'required',
-                'in:0,90,180,270',
-            ],
+            // Module 1: Dual-Mode Watermarking & 9-Point Positioning Matrix
+            'watermark_mode' => ['required', 'in:none,text,logo,tiled'],
+            'watermark_text' => ['nullable', 'string', 'max:100'],
+            'watermark_logo' => ['nullable', 'image', 'mimes:png,webp,jpg,jpeg', 'max:2048'],
+            'watermark_position' => ['required', 'in:top-left,top,top-right,left,center,right,bottom-left,bottom,bottom-right'],
+            'watermark_opacity' => ['required', 'integer', 'min:10', 'max:100'],
+            'watermark_padding' => ['required', 'integer', 'min:5', 'max:100'],
 
-            'watermark' => [
-                'nullable',
-                'string',
-                'max:100',
-            ],
-
-            'format' => [
-                'required',
-                'in:original,jpg,png,webp',
-            ],
-
-            'quality' => [
-                'required',
-                'integer',
-                'min:10',
-                'max:100',
-            ],
-
-            // New features
-            'auto_orientation' => [
-                'required',
-                'in:yes,no',
-            ],
-
-            'brightness' => [
-                'required',
-                'integer',
-                'min:-100',
-                'max:100',
-            ],
-
-            'contrast' => [
-                'required',
-                'integer',
-                'min:-100',
-                'max:100',
-            ],
-
-            'grayscale' => [
-                'required',
-                'in:yes,no',
-            ],
-
-            'blur' => [
-                'required',
-                'integer',
-                'min:0',
-                'max:20',
-            ],
-
-            'sharpen' => [
-                'required',
-                'integer',
-                'min:0',
-                'max:20',
-            ],
-
-            'mirror' => [
-                'required',
-                'in:none,horizontal,vertical',
-            ],
-
-            'invert' => [
-                'required',
-                'in:yes,no',
-            ],
+            // Module 2: Smart Multi-Size Responsive Variants Generator
+            'generate_variants' => ['required', 'in:yes,no'],
         ]);
 
         /*
         |--------------------------------------------------------------------------
-        | Create directories
+        | Prepare Required Directories
         |--------------------------------------------------------------------------
         */
+        $paths = [
+            'images' => public_path('images'),
+            'thumbnail' => public_path('images/thumbnail'),
+            'processed' => public_path('images/processed'),
+            'variants' => public_path('images/variants'),
+            'zips' => public_path('images/zips'),
+        ];
 
-        $imagesPath = public_path('images');
-
-        $thumbnailPath = public_path('images/thumbnail');
-
-        $processedPath = public_path('images/processed');
-
-        if (!File::exists($imagesPath)) {
-            File::makeDirectory(
-                $imagesPath,
-                0755,
-                true
-            );
+        foreach ($paths as $path) {
+            if (!File::exists($path)) {
+                File::makeDirectory($path, 0755, true);
+            }
         }
 
-        if (!File::exists($thumbnailPath)) {
-            File::makeDirectory(
-                $thumbnailPath,
-                0755,
-                true
-            );
-        }
-
-        if (!File::exists($processedPath)) {
-            File::makeDirectory(
-                $processedPath,
-                0755,
-                true
-            );
-        }
+        $manager = new ImageManager(new Driver(), autoOrientation: false);
 
         /*
         |--------------------------------------------------------------------------
-        | Create Image Manager
+        | Save Original Upload
         |--------------------------------------------------------------------------
         */
-
-        $manager = new ImageManager(
-            new Driver(),
-            autoOrientation: false
-        );
-
-        /*
-        |--------------------------------------------------------------------------
-        | Upload original image
-        |--------------------------------------------------------------------------
-        */
-
-        $uploadedImage = $request->file('image');
-
-        $originalExtension = strtolower(
-            $uploadedImage->getClientOriginalExtension()
-        );
-
-        $originalName = pathinfo(
-            $uploadedImage->getClientOriginalName(),
-            PATHINFO_FILENAME
-        );
-
-        $safeOriginalName = preg_replace(
-            '/[^A-Za-z0-9_-]/',
-            '_',
-            $originalName
-        );
-
+        $uploadedFile = $request->file('image');
+        $originalExt = strtolower($uploadedFile->getClientOriginalExtension());
+        $originalName = pathinfo($uploadedFile->getClientOriginalName(), PATHINFO_FILENAME);
+        $safeOriginalName = preg_replace('/[^A-Za-z0-9_-]/', '_', $originalName);
         $timestamp = now()->format('Ymd_His');
 
-        $originalFileName =
-            $safeOriginalName . '_' .
-            $timestamp . '.' .
-            $originalExtension;
+        $originalFileName = "{$safeOriginalName}_{$timestamp}.{$originalExt}";
+        $originalFullPath = $paths['images'] . DIRECTORY_SEPARATOR . $originalFileName;
+        $uploadedFile->move($paths['images'], $originalFileName);
+
+        $originalFileSize = File::size($originalFullPath);
 
         /*
         |--------------------------------------------------------------------------
-        | Save original image
+        | 1. Create 150x150 Thumbnail
         |--------------------------------------------------------------------------
         */
-
-        $uploadedImage->move(
-            $imagesPath,
-            $originalFileName
-        );
-
-        $originalFullPath =
-            $imagesPath . DIRECTORY_SEPARATOR . $originalFileName;
-
-        /*
-        |--------------------------------------------------------------------------
-        | Read original image
-        |--------------------------------------------------------------------------
-        */
-
-        $originalImage = $manager->read(
-            $originalFullPath
-        );
-
-        /*
-        |--------------------------------------------------------------------------
-        | Create 100x100 thumbnail
-        |--------------------------------------------------------------------------
-        */
-
-        $thumbnailImage = $manager->read(
-            $originalFullPath
-        );
-
+        $thumbnailImg = $manager->read($originalFullPath);
         if ($validated['auto_orientation'] === 'yes') {
-            $thumbnailImage->orient();
+            $thumbnailImg->orient();
         }
+        $thumbnailImg->cover(150, 150);
 
-        $thumbnailImage->cover(
-            100,
-            100
-        );
+        $thumbnailFileName = "{$safeOriginalName}_{$timestamp}_thumb.{$originalExt}";
+        $thumbnailFullPath = $paths['thumbnail'] . DIRECTORY_SEPARATOR . $thumbnailFileName;
 
-        $thumbnailFileName =
-            pathinfo(
-                $originalFileName,
-                PATHINFO_FILENAME
-            ) . '_thumbnail.' .
-            $originalExtension;
-
-        $thumbnailFullPath =
-            $thumbnailPath .
-            DIRECTORY_SEPARATOR .
-            $thumbnailFileName;
-
-        /*
-        |--------------------------------------------------------------------------
-        | Save thumbnail according to original extension
-        |--------------------------------------------------------------------------
-        */
-
-        switch ($originalExtension) {
-            case 'jpg':
-            case 'jpeg':
-                $thumbnailImage
-                    ->toJpeg(85)
-                    ->save($thumbnailFullPath);
-                break;
-
-            case 'png':
-                $thumbnailImage
-                    ->toPng(false)
-                    ->save($thumbnailFullPath);
-                break;
-
-            case 'webp':
-                $thumbnailImage
-                    ->toWebp(85)
-                    ->save($thumbnailFullPath);
-                break;
-
-            default:
-                $thumbnailImage
-                    ->toJpeg(85)
-                    ->save($thumbnailFullPath);
-
-                break;
+        if ($originalExt === 'png') {
+            $thumbnailImg->toPng(false)->save($thumbnailFullPath);
+        } elseif ($originalExt === 'webp') {
+            $thumbnailImg->toWebp(85)->save($thumbnailFullPath);
+        } elseif ($originalExt === 'avif') {
+            $thumbnailImg->toAvif(85)->save($thumbnailFullPath);
+        } else {
+            $thumbnailImg->toJpeg(85)->save($thumbnailFullPath);
         }
 
         /*
         |--------------------------------------------------------------------------
-        | Read image for processing
+        | 2. Main Image Transformations
         |--------------------------------------------------------------------------
         */
+        $image = $manager->read($originalFullPath);
 
-        $processedImage = $manager->read(
-            $originalFullPath
-        );
-
-        /*
-        |--------------------------------------------------------------------------
-        | 1. EXIF Auto Orientation
-        |--------------------------------------------------------------------------
-        */
-
+        // Auto orientation
         if ($validated['auto_orientation'] === 'yes') {
-            $processedImage->orient();
+            $image->orient();
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | 2. Crop / Aspect Ratio
-        |--------------------------------------------------------------------------
-        */
-
+        // Crop / Aspect Ratio
         switch ($validated['crop']) {
             case '1:1':
-                $processedImage->cover(
-                    600,
-                    600
-                );
+                $minDim = min($image->width(), $image->height());
+                $image->cover($minDim, $minDim);
                 break;
-
             case '4:3':
-                $processedImage->cover(
-                    800,
-                    600
-                );
+                $w = $image->width();
+                $h = (int) round($w * 3 / 4);
+                if ($h > $image->height()) {
+                    $h = $image->height();
+                    $w = (int) round($h * 4 / 3);
+                }
+                $image->cover($w, $h);
                 break;
-
             case '3:4':
-                $processedImage->cover(
-                    600,
-                    800
-                );
+                $w = $image->width();
+                $h = (int) round($w * 4 / 3);
+                if ($h > $image->height()) {
+                    $h = $image->height();
+                    $w = (int) round($h * 3 / 4);
+                }
+                $image->cover($w, $h);
                 break;
-
             case '16:9':
-                $processedImage->cover(
-                    800,
-                    450
-                );
-                break;
-
-            case 'original':
-            default:
-                break;
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Resize
-        |--------------------------------------------------------------------------
-        */
-
-        switch ($validated['resize']) {
-            case '300x300':
-                $processedImage->resize(
-                    300,
-                    300
-                );
-                break;
-
-            case '600x400':
-                $processedImage->resize(
-                    600,
-                    400
-                );
-                break;
-
-            case '800x600':
-                $processedImage->resize(
-                    800,
-                    600
-                );
-                break;
-
-            case 'original':
-            default:
+                $w = $image->width();
+                $h = (int) round($w * 9 / 16);
+                if ($h > $image->height()) {
+                    $h = $image->height();
+                    $w = (int) round($h * 16 / 9);
+                }
+                $image->cover($w, $h);
                 break;
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | Rotation
-        |--------------------------------------------------------------------------
-        */
+        // Resize
+        if ($validated['resize'] !== 'original') {
+            [$rw, $rh] = explode('x', $validated['resize']);
+            $image->resize((int) $rw, (int) $rh);
+        }
 
+        // Rotation
         $rotation = (int) $validated['rotation'];
-
         if ($rotation !== 0) {
-            $processedImage->rotate(
-                $rotation
-            );
+            $image->rotate($rotation);
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | Brightness
-        |--------------------------------------------------------------------------
-        */
-
+        // Brightness & Contrast
         $brightness = (int) $validated['brightness'];
-
         if ($brightness !== 0) {
-            $processedImage->brightness(
-                $brightness
-            );
+            $image->brightness($brightness);
         }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Contrast
-        |--------------------------------------------------------------------------
-        */
 
         $contrast = (int) $validated['contrast'];
-
         if ($contrast !== 0) {
-            $processedImage->contrast(
-                $contrast
-            );
+            $image->contrast($contrast);
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | Grayscale
-        |--------------------------------------------------------------------------
-        */
-
+        // Grayscale
         if ($validated['grayscale'] === 'yes') {
-            $processedImage->greyscale();
+            $image->greyscale();
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | Blur
-        |--------------------------------------------------------------------------
-        */
-
+        // Blur & Sharpen
         $blur = (int) $validated['blur'];
-
         if ($blur > 0) {
-            $processedImage->blur(
-                $blur
-            );
+            $image->blur($blur);
         }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Sharpen
-        |--------------------------------------------------------------------------
-        */
 
         $sharpen = (int) $validated['sharpen'];
-
         if ($sharpen > 0) {
-            $processedImage->sharpen(
-                $sharpen
-            );
+            $image->sharpen($sharpen);
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | Horizontal / Vertical Mirror
-        |--------------------------------------------------------------------------
-        */
-
-        switch ($validated['mirror']) {
-            case 'horizontal':
-                $processedImage->flop();
-                break;
-
-            case 'vertical':
-                $processedImage->flip();
-                break;
-
-            case 'none':
-            default:
-                break;
+        // Mirror / Flip
+        if ($validated['mirror'] === 'horizontal') {
+            $image->flop();
+        } elseif ($validated['mirror'] === 'vertical') {
+            $image->flip();
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | Invert Colors
-        |--------------------------------------------------------------------------
-        */
-
+        // Invert Colors
         if ($validated['invert'] === 'yes') {
-            $processedImage->invert();
+            $image->invert();
         }
 
         /*
         |--------------------------------------------------------------------------
-        | Watermark
+        | Module 1: Dual-Mode Watermarking & 9-Point Positioning Matrix
         |--------------------------------------------------------------------------
         */
+        $watermarkMode = $validated['watermark_mode'];
+        $wmPosition = $validated['watermark_position'];
+        $wmOpacity = (int) $validated['watermark_opacity'];
+        $wmPadding = (int) $validated['watermark_padding'];
+        $watermarkInfo = 'None';
 
-        if (
-            isset($validated['watermark']) &&
-            trim($validated['watermark']) !== ''
-        ) {
-            $watermarkText = trim(
-                $validated['watermark']
-            );
+        if ($watermarkMode === 'logo' && $request->hasFile('watermark_logo')) {
+            // Logo Watermark
+            $logoFile = $request->file('watermark_logo');
+            $logo = $manager->read($logoFile->getRealPath());
 
-            $processedImage->text(
-                $watermarkText,
-                20,
-                20,
-                function ($font) {
-                    $font->size(24);
-                    $font->color('#ffffff');
-                    $font->stroke(
-                        '#000000',
-                        2
-                    );
+            // Auto scale logo to max 25% of target image width
+            $maxLogoW = (int) round($image->width() * 0.25);
+            if ($logo->width() > $maxLogoW) {
+                $logo->scale(width: $maxLogoW);
+            }
+
+            $image->place($logo, $wmPosition, $wmPadding, $wmPadding, $wmOpacity);
+            $watermarkInfo = "Logo Image ({$wmPosition}, {$wmOpacity}% opacity)";
+        } elseif ($watermarkMode === 'text' && !empty($validated['watermark_text'])) {
+            // Text Watermark placed with 9-point grid and opacity
+            $text = trim($validated['watermark_text']);
+            $fontSize = max(16, (int) round($image->width() * 0.035));
+
+            // Estimate text dimensions and place
+            $textCanvas = $manager->create((int) ($fontSize * mb_strlen($text) * 0.8), (int) ($fontSize * 1.8));
+            $textCanvas->text($text, 10, (int) ($fontSize * 1.2), function ($font) use ($fontSize) {
+                $font->size($fontSize);
+                $font->color('#ffffff');
+                $font->stroke('#000000', 2);
+            });
+
+            $image->place($textCanvas, $wmPosition, $wmPadding, $wmPadding, $wmOpacity);
+            $watermarkInfo = "Text: \"{$text}\" ({$wmPosition}, {$wmOpacity}% opacity)";
+        } elseif ($watermarkMode === 'tiled') {
+            // Full Diagonal Tiled Copyright Pattern
+            $tiledText = !empty($validated['watermark_text']) ? trim($validated['watermark_text']) : '© COPYRIGHT PROTECTED';
+            $w = $image->width();
+            $h = $image->height();
+            $stepX = max(180, (int) ($w / 4));
+            $stepY = max(120, (int) ($h / 5));
+
+            for ($x = 20; $x < $w; $x += $stepX) {
+                for ($y = 40; $y < $h; $y += $stepY) {
+                    $image->text($tiledText, $x, $y, function ($font) {
+                        $font->size(20);
+                        $font->color('ffffff55');
+                        $font->stroke('00000033', 1);
+                    });
                 }
-            );
+            }
+            $watermarkInfo = "Full Tiled Pattern (\"{$tiledText}\")";
         }
 
         /*
         |--------------------------------------------------------------------------
-        | Output Format
+        | Module 3: Target Size Compression & Quality Optimization
         |--------------------------------------------------------------------------
         */
-
-        $format = $validated['format'];
+        $outputFormat = $validated['format'] === 'original' ? $originalExt : $validated['format'];
+        if (!in_array($outputFormat, ['jpg', 'jpeg', 'png', 'webp', 'avif'], true)) {
+            $outputFormat = 'jpg';
+        }
 
         $quality = (int) $validated['quality'];
+        $targetKb = $validated['target_kb'] ? (int) $validated['target_kb'] : null;
 
-        $extension = $originalExtension;
+        if ($validated['compression_mode'] === 'target_size' && $targetKb > 0 && in_array($outputFormat, ['jpg', 'jpeg', 'webp', 'avif'])) {
+            // Iterative binary search to find the optimal quality meeting target size in KB
+            $targetBytes = $targetKb * 1024;
+            $low = 10;
+            $high = 95;
+            $bestQuality = 75;
+
+            while ($low <= $high) {
+                $mid = (int) round(($low + $high) / 2);
+                $encodedSample = $this->encodeImage($image, $outputFormat, $mid);
+                $sampleSize = strlen((string) $encodedSample);
+
+                if ($sampleSize <= $targetBytes) {
+                    $bestQuality = $mid;
+                    $low = $mid + 1; // Try for better quality
+                } else {
+                    $high = $mid - 1; // Need smaller size
+                }
+            }
+            $quality = $bestQuality;
+        }
+
+        // Final encoding of processed image
+        $encodedProcessed = $this->encodeImage($image, $outputFormat, $quality);
+
+        $processedExt = ($outputFormat === 'jpeg') ? 'jpg' : $outputFormat;
+        $processedFileName = "{$safeOriginalName}_{$timestamp}_processed.{$processedExt}";
+        $processedFullPath = $paths['processed'] . DIRECTORY_SEPARATOR . $processedFileName;
+        $encodedProcessed->save($processedFullPath);
+
+        $processedFileSize = File::size($processedFullPath);
+        $savedBytes = max(0, $originalFileSize - $processedFileSize);
+        $savedPercent = ($originalFileSize > 0) ? round(($savedBytes / $originalFileSize) * 100, 1) : 0;
 
         /*
         |--------------------------------------------------------------------------
-        | Encode image
+        | Module 2: Smart Multi-Size Variant & Responsive <picture> Snippet Generator
         |--------------------------------------------------------------------------
-        |
-        | IMPORTANT:
-        |
-        | Intervention Image installed in this project expects:
-        |
-        | toPng(bool $interlaced = false)
-        |
-        | Therefore we MUST NOT pass the numeric quality/compression
-        | value to toPng().
-        |
         */
+        $variantsList = [];
+        $zipFileName = null;
+        $pictureSnippet = '';
 
-        switch ($format) {
-            /*
-            |--------------------------------------------------------------------------
-            | JPG
-            |--------------------------------------------------------------------------
-            */
+        if ($validated['generate_variants'] === 'yes') {
+            $variantDefinitions = [
+                'thumb'   => ['label' => 'Thumbnail', 'w' => 150, 'h' => 150, 'mode' => 'cover'],
+                'mobile'  => ['label' => 'Mobile View', 'w' => 480, 'h' => null, 'mode' => 'scale'],
+                'tablet'  => ['label' => 'Tablet View', 'w' => 768, 'h' => null, 'mode' => 'scale'],
+                'desktop' => ['label' => 'Desktop HD', 'w' => 1200, 'h' => null, 'mode' => 'scale'],
+                'retina'  => ['label' => 'Retina 2x', 'w' => 2000, 'h' => null, 'mode' => 'scale'],
+            ];
 
-            case 'jpg':
+            $zipFileName = "variants_{$safeOriginalName}_{$timestamp}.zip";
+            $zipFullPath = $paths['zips'] . DIRECTORY_SEPARATOR . $zipFileName;
+            $zip = new ZipArchive();
+            $zip->open($zipFullPath, ZipArchive::CREATE | ZipArchive::OVERWRITE);
 
-                $encodedImage =
-                    $processedImage->toJpeg(
-                        $quality
-                    );
-
-                $extension = 'jpg';
-
-                break;
-
-            /*
-            |--------------------------------------------------------------------------
-            | PNG
-            |--------------------------------------------------------------------------
-            */
-
-            case 'png':
-
-                $encodedImage =
-                    $processedImage->toPng(
-                        false
-                    );
-
-                $extension = 'png';
-
-                break;
-
-            /*
-            |--------------------------------------------------------------------------
-            | WEBP
-            |--------------------------------------------------------------------------
-            */
-
-            case 'webp':
-
-                $encodedImage =
-                    $processedImage->toWebp(
-                        $quality
-                    );
-
-                $extension = 'webp';
-
-                break;
-
-            /*
-            |--------------------------------------------------------------------------
-            | Original
-            |--------------------------------------------------------------------------
-            */
-
-            case 'original':
-            default:
-
-                switch ($originalExtension) {
-                    case 'jpg':
-                    case 'jpeg':
-
-                        $encodedImage =
-                            $processedImage->toJpeg(
-                                $quality
-                            );
-
-                        $extension = 'jpg';
-
-                        break;
-
-                    case 'png':
-
-                        $encodedImage =
-                            $processedImage->toPng(
-                                false
-                            );
-
-                        $extension = 'png';
-
-                        break;
-
-                    case 'webp':
-
-                        $encodedImage =
-                            $processedImage->toWebp(
-                                $quality
-                            );
-
-                        $extension = 'webp';
-
-                        break;
-
-                    default:
-
-                        $encodedImage =
-                            $processedImage->toJpeg(
-                                $quality
-                            );
-
-                        $extension = 'jpg';
-
-                        break;
+            foreach ($variantDefinitions as $key => $def) {
+                $vImg = $manager->read($processedFullPath);
+                if ($def['mode'] === 'cover') {
+                    $vImg->cover($def['w'], $def['h']);
+                } else {
+                    if ($vImg->width() > $def['w']) {
+                        $vImg->scale(width: $def['w']);
+                    }
                 }
 
-                break;
+                // Generate WebP and AVIF versions for each variant
+                $vNameWebp = "{$safeOriginalName}_{$timestamp}_{$key}.webp";
+                $vPathWebp = $paths['variants'] . DIRECTORY_SEPARATOR . $vNameWebp;
+                $vImg->toWebp(80)->save($vPathWebp);
+
+                $vNameAvif = "{$safeOriginalName}_{$timestamp}_{$key}.avif";
+                $vPathAvif = $paths['variants'] . DIRECTORY_SEPARATOR . $vNameAvif;
+                $vImg->toAvif(80)->save($vPathAvif);
+
+                // Add to ZIP
+                $zip->addFile($vPathWebp, "webp/{$vNameWebp}");
+                $zip->addFile($vPathAvif, "avif/{$vNameAvif}");
+
+                $variantsList[$key] = [
+                    'label' => $def['label'],
+                    'width' => $vImg->width(),
+                    'height' => $vImg->height(),
+                    'webp' => $vNameWebp,
+                    'avif' => $vNameAvif,
+                    'size_kb' => round(File::size($vPathWebp) / 1024, 1),
+                ];
+            }
+
+            // Also add main processed image to zip
+            $zip->addFile($processedFullPath, "main/{$processedFileName}");
+            $zip->close();
+
+            // Generate HTML <picture> code snippet
+            $pictureSnippet = $this->generatePictureSnippet($safeOriginalName, $timestamp, $variantsList, $processedFileName);
         }
 
         /*
         |--------------------------------------------------------------------------
-        | Processed filename
+        | Store Result Payload in Session
         |--------------------------------------------------------------------------
         */
-
-        $processedFileName =
-            pathinfo(
-                $originalFileName,
-                PATHINFO_FILENAME
-            ) .
-            '_processed_' .
-            now()->format('Ymd_His') .
-            '.' .
-            $extension;
-
-        $processedFullPath =
-            $processedPath .
-            DIRECTORY_SEPARATOR .
-            $processedFileName;
-
-        /*
-        |--------------------------------------------------------------------------
-        | Save processed image
-        |--------------------------------------------------------------------------
-        */
-
-        $encodedImage->save(
-            $processedFullPath
-        );
-
-        /*
-        |--------------------------------------------------------------------------
-        | Processed file information
-        |--------------------------------------------------------------------------
-        */
-
-        $processedFileSize =
-            File::size(
-                $processedFullPath
-            );
-
-        $processedWidth =
-            $processedImage->width();
-
-        $processedHeight =
-            $processedImage->height();
-
-        /*
-        |--------------------------------------------------------------------------
-        | Store result information in session
-        |--------------------------------------------------------------------------
-        */
-
         session([
             'image_result' => [
                 'original' => $originalFileName,
-
                 'thumbnail' => $thumbnailFileName,
-
                 'processed' => $processedFileName,
-
-                'crop' => $validated['crop'],
-
-                'resize' => $validated['resize'],
-
-                'rotation' => $validated['rotation'],
-
-                'watermark' =>
-                    $validated['watermark'] ?? '',
-
-                'format' => $format,
-
+                'original_size_bytes' => $originalFileSize,
+                'original_size_kb' => round($originalFileSize / 1024, 2),
+                'original_size_mb' => round($originalFileSize / (1024 * 1024), 2),
+                'processed_size_bytes' => $processedFileSize,
+                'processed_size_kb' => round($processedFileSize / 1024, 2),
+                'saved_bytes' => $savedBytes,
+                'saved_percent' => $savedPercent,
+                'width' => $image->width(),
+                'height' => $image->height(),
+                'format' => $processedExt,
                 'quality' => $quality,
-
-                'auto_orientation' =>
-                    $validated['auto_orientation'],
-
-                'brightness' =>
-                    $brightness,
-
-                'contrast' =>
-                    $contrast,
-
-                'grayscale' =>
-                    $validated['grayscale'],
-
-                'blur' =>
-                    $blur,
-
-                'sharpen' =>
-                    $sharpen,
-
-                'mirror' =>
-                    $validated['mirror'],
-
-                'invert' =>
-                    $validated['invert'],
-
-                'width' =>
-                    $processedWidth,
-
-                'height' =>
-                    $processedHeight,
-
-                'file_size' =>
-                    $processedFileSize,
-
-                'file_size_kb' =>
-                    round(
-                        $processedFileSize / 1024,
-                        2
-                    ),
+                'compression_mode' => $validated['compression_mode'],
+                'target_kb' => $targetKb,
+                'watermark_mode' => $watermarkMode,
+                'watermark_info' => $watermarkInfo,
+                'watermark_position' => $wmPosition,
+                'crop' => $validated['crop'],
+                'resize' => $validated['resize'],
+                'rotation' => $validated['rotation'],
+                'variants' => $variantsList,
+                'zip_file' => $zipFileName,
+                'picture_snippet' => $pictureSnippet,
             ],
         ]);
 
-        /*
-        |--------------------------------------------------------------------------
-        | Redirect
-        |--------------------------------------------------------------------------
-        */
-
         return redirect()
             ->route('image.index')
-            ->with(
-                'success',
-                'Image processed successfully.'
-            );
+            ->with('success', 'Image processed, watermarked, optimized and responsive variants generated successfully!');
+    }
+
+    /**
+     * Download generated ZIP archive of responsive variants.
+     */
+    public function downloadZip(string $filename): BinaryFileResponse|RedirectResponse
+    {
+        $safeName = basename($filename);
+        $fullPath = public_path('images/zips/' . $safeName);
+
+        if (!File::exists($fullPath)) {
+            return redirect()->route('image.index')->with('error', 'Requested ZIP archive not found or expired.');
+        }
+
+        return response()->download($fullPath, $safeName, [
+            'Content-Type' => 'application/zip',
+        ]);
+    }
+
+    /**
+     * Encode image based on format and quality.
+     */
+    protected function encodeImage($image, string $format, int $quality)
+    {
+        switch ($format) {
+            case 'webp':
+                return $image->toWebp($quality);
+            case 'avif':
+                return $image->toAvif($quality);
+            case 'png':
+                return $image->toPng(false);
+            case 'jpg':
+            case 'jpeg':
+            default:
+                return $image->toJpeg($quality);
+        }
+    }
+
+    /**
+     * Generate HTML <picture> code snippet with responsive srcset breakpoints.
+     */
+    protected function generatePictureSnippet(string $safeName, string $timestamp, array $variants, string $fallbackFile): string
+    {
+        $baseUrl = asset('images/variants');
+        $mainUrl = asset('images/processed/' . $fallbackFile);
+
+        $avifSources = [];
+        $webpSources = [];
+
+        if (isset($variants['mobile'])) {
+            $avifSources[] = "{$baseUrl}/{$variants['mobile']['avif']} 480w";
+            $webpSources[] = "{$baseUrl}/{$variants['mobile']['webp']} 480w";
+        }
+        if (isset($variants['tablet'])) {
+            $avifSources[] = "{$baseUrl}/{$variants['tablet']['avif']} 768w";
+            $webpSources[] = "{$baseUrl}/{$variants['tablet']['webp']} 768w";
+        }
+        if (isset($variants['desktop'])) {
+            $avifSources[] = "{$baseUrl}/{$variants['desktop']['avif']} 1200w";
+            $webpSources[] = "{$baseUrl}/{$variants['desktop']['webp']} 1200w";
+        }
+
+        $avifSrcset = implode(', ', $avifSources);
+        $webpSrcset = implode(', ', $webpSources);
+
+        return <<<HTML
+<picture>
+    <!-- AVIF next-gen format for ultra fast modern browsers -->
+    <source type="image/avif" srcset="{$avifSrcset}" sizes="(max-width: 768px) 100vw, 1200px">
+    
+    <!-- WebP format for broad modern browser support -->
+    <source type="image/webp" srcset="{$webpSrcset}" sizes="(max-width: 768px) 100vw, 1200px">
+    
+    <!-- Fallback default image -->
+    <img src="{$mainUrl}" alt="Responsive Optimized Media" class="img-fluid rounded shadow" loading="lazy" decoding="async">
+</picture>
+HTML;
     }
 }
